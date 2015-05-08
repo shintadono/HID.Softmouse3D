@@ -42,7 +42,7 @@ namespace HID.Softmouse3D
 		public event EventHandler<Softmouse3DButtonsEventArgs> ButtonClick;
 
 		/// <summary>
-		/// Fired when a button is double clicked.
+		/// Fired when a button is double-clicked.
 		/// </summary>
 		public event EventHandler<Softmouse3DButtonsEventArgs> ButtonDoubleClick;
 
@@ -81,6 +81,7 @@ namespace HID.Softmouse3D
 			MaximumDoubleClickTime=250;
 		}
 
+		#region State
 		enum Button
 		{
 			A1=0,
@@ -95,7 +96,7 @@ namespace HID.Softmouse3D
 			SR=9,
 		}
 
-		static readonly Softmouse3DButtons[] buttonFilter=new Softmouse3DButtons[] 
+		static readonly Softmouse3DButtons[] buttonFilter=new Softmouse3DButtons[]
 		{
 			Softmouse3DButtons.A1, Softmouse3DButtons.A2, Softmouse3DButtons.A3, Softmouse3DButtons.A4,
 			Softmouse3DButtons.D1, Softmouse3DButtons.D2, Softmouse3DButtons.D3, Softmouse3DButtons.D4,
@@ -113,147 +114,201 @@ namespace HID.Softmouse3D
 			public Softmouse3DButtons Buttons;
 			public ButtonState[] ButtonsStates=new ButtonState[10];
 		}
+		#endregion
 
 		Dictionary<IntPtr, State> StatePreDevice=new Dictionary<IntPtr, State>();
 
 		const int RAWHID_without_Data_Size=8;
 
 		/// <summary>
-		/// Processes a <see cref="WM.INPUT">WM_INPUT</see> messages and raises the proper events.
+		/// Processes a <see cref="WM.INPUT">WM_INPUT</see> messages and fires the proper events.
 		/// </summary>
 		/// <param name="lParam">The handle to the raw input dataset.</param>
 		/// <param name="size">The size, in bytes, of the raw input dataset.</param>
 		public void ProcessInput(IntPtr lParam, uint size)
 		{
-			// copy event handler
-			EventHandler<Softmouse3DButtonsEventArgs> dEvt=ButtonDown;
-			EventHandler<Softmouse3DButtonsEventArgs> uEvt=ButtonUp;
-			EventHandler<Softmouse3DButtonsEventArgs> cEvt=ButtonClick;
-			EventHandler<Softmouse3DButtonsEventArgs> dcEvt=ButtonDoubleClick;
-			EventHandler<Softmouse3DEventArgs> mEvt=MouseMove;
-			EventHandler<Softmouse3DEventArgs> wEvt=MouseWheel;
+			// Copy event handler
+			EventHandler<Softmouse3DButtonsEventArgs> dEvt=ButtonDown, uEvt=ButtonUp, cEvt=ButtonClick, dcEvt=ButtonDoubleClick;
+			EventHandler<Softmouse3DEventArgs> mEvt=MouseMove, wEvt=MouseWheel;
 
-			if(dEvt!=null||uEvt!=null||cEvt!=null||dcEvt!=null||mEvt!=null||wEvt!=null) // no need to handle if nobody is listing
+			if(dEvt==null&&uEvt==null&&cEvt==null&&dcEvt==null&&mEvt==null&&wEvt==null) return; // No need to handle if nobody is listing
+
+			long currentTicks=DateTime.Now.Ticks;
+
+			IntPtr buffer=Marshal.AllocHGlobal((int)size);
+			uint dwSize=size;
+
+			try
 			{
-				long ticks=DateTime.Now.Ticks;
+				// Get the raw data set
+				uint err=RawInput.GetRawInputData(lParam, RID.INPUT, buffer, ref dwSize, RAWINPUTHEADER.SIZE);
+				if(err==uint.MaxValue) throw new Exception(string.Format("Error getting WM_INPUT data. (Error code: 0x{0:X8})", WinKernel.GetLastError()));
 
-				IntPtr buffer=Marshal.AllocHGlobal((int)size);
-				uint dwSize=size;
+				// Filter raw input (header + record number and size)
+				RAWINPUT inputHeader=(RAWINPUT)Marshal.PtrToStructure(buffer, typeof(RAWINPUT));
+				int inputHeaderSize=(int)RAWINPUTHEADER.SIZE+RAWHID_without_Data_Size;
 
-				try
+				if(inputHeader.header.dwSize<inputHeaderSize+Softmouse3DEventData.SIZE||inputHeader.data.hid.dwSizeHid!=Softmouse3DEventData.SIZE) return; // No enough or invalid data to process
+
+				// Fill dictionary if we don't have a device state, yet
+				if(!StatePreDevice.ContainsKey(inputHeader.header.hDevice)) StatePreDevice.Add(inputHeader.header.hDevice, new State());
+
+				// Get last device state
+				State last=StatePreDevice[inputHeader.header.hDevice];
+
+				// Handle all data records
+				for(int i=0; i<inputHeader.data.hid.dwCount; i++)
 				{
-					uint err=RawInput.GetRawInputData(lParam, RID.INPUT, buffer, ref dwSize, RAWINPUTHEADER.SIZE);
-					if(err==uint.MaxValue) throw new Exception(string.Format("Error getting WM_INPUT data. (Error code: 0x{0:X8})", WinKernel.GetLastError()));
+					// Get a data record from raw data set
+					Softmouse3DEventData eventData=(Softmouse3DEventData)Marshal.PtrToStructure(buffer+inputHeaderSize+i*(int)Softmouse3DEventData.SIZE, typeof(Softmouse3DEventData));
 
-					RAWINPUT inputHeader=(RAWINPUT)Marshal.PtrToStructure(buffer, typeof(RAWINPUT));
-					int inputHeaderSize=(int)RAWINPUTHEADER.SIZE+RAWHID_without_Data_Size;
+					// Get the buttons (filter out other possible stuff)
+					Softmouse3DButtons buttons=(Softmouse3DButtons)(eventData.ButtonState&0x000f3f00);
 
-					if(inputHeader.header.dwSize>=inputHeaderSize+Softmouse3DEventData.SIZE&&
-						inputHeader.data.hid.dwSizeHid==Softmouse3DEventData.SIZE)
+					#region Handle movement
+					// Fire X-Y move event
+					if(mEvt!=null) mEvt(this, new Softmouse3DEventArgs(inputHeader.header.hDevice, eventData.X, eventData.Y, 0, buttons));
+
+					// Fire Z-Wheel move event
+					if(wEvt!=null) wEvt(this, new Softmouse3DEventArgs(inputHeader.header.hDevice, 0, 0, eventData.Z, buttons));
+					#endregion
+
+					#region Add movement to previously pressed buttons and handle if limit a exceeded
+					for(int b=0; b<10; b++) // for all buttons
 					{
-						// Fill dictionary if missed
-						if(!StatePreDevice.ContainsKey(inputHeader.header.hDevice))
-							StatePreDevice.Add(inputHeader.header.hDevice, new State());
+						if(last.ButtonsStates[b].Clicks!=1) continue; // If not clicked yet, or already a double-click => continue
 
-						State last=StatePreDevice[inputHeader.header.hDevice];
+						// Sum up movement
+						last.ButtonsStates[i].MoveX+=eventData.X;
+						last.ButtonsStates[i].MoveY+=eventData.Y;
 
-						for(int i=0; i<inputHeader.data.hid.dwCount; i++)
+						if(Math.Abs(last.ButtonsStates[i].MoveX)>MaximumDoubleClickMovement||
+							Math.Abs(last.ButtonsStates[i].MoveY)>MaximumDoubleClickMovement||
+							(currentTicks-last.ButtonsStates[i].Down)/10000>MaximumDoubleClickTime)
 						{
-							Softmouse3DEventData eventData=(Softmouse3DEventData)Marshal.PtrToStructure(buffer+inputHeaderSize+i*(int)Softmouse3DEventData.SIZE, typeof(Softmouse3DEventData));
-
-							Softmouse3DButtons buttons=(Softmouse3DButtons)(eventData.ButtonState&0x000f3f00);
-
-							#region Add movement to previously pressed buttons and handle if limit a exceeded
-							for(int b=0; b<10; b++)
-							{
-								if(last.ButtonsStates[b].Clicks==0) continue;
-
-								// sum up movement
-								last.ButtonsStates[i].MoveX+=eventData.X;
-								last.ButtonsStates[i].MoveY+=eventData.Y;
-
-								if(Math.Abs(last.ButtonsStates[i].MoveX)>MaximumDoubleClickMovement||
-									Math.Abs(last.ButtonsStates[i].MoveY)>MaximumDoubleClickMovement||
-									(ticks-last.ButtonsStates[i].Down)/10000>MaximumDoubleClickTime)
-								{
-									last.ButtonsStates[i].Clicks=0;
-									last.ButtonsStates[i].Down=0;
-									last.ButtonsStates[i].MoveX=0;
-									last.ButtonsStates[i].MoveY=0;
-								}
-							}
-							#endregion
-
-							Softmouse3DButtons diffButtons=(buttons^last.Buttons);
-
-							// Order of click and double-click events in WindowsForms (want to provide the same here)
-							// 1. Down (Clicks: 1)
-							// 2. Click (Clicks: 1)
-							// 3. Up (Clicks: 1)
-							// ---- end of single click
-							// 4. Down (Clicks: 2)
-							// 5. DoubleClick (Clicks: 2)
-							// 6. Up (Clicks: 1)
-							// ? Should we support more Clicks? Is it enough to add up the clicks and raise DoubleClick again, or do we need an extra event?
-							// DoubleClick Time is form 1. down to next down. So we can reset the time last.ButtonState[?].Down time value on each button down.
-
-							if(diffButtons!=0) // any buttons changed?
-							{
-								// First the shift buttons down to support very fast button combination
-								if((buttons&Softmouse3DButtons.SL)!=0&&(last.Buttons&Softmouse3DButtons.SL)==0)
-								{
-								}
-
-								if((buttons&Softmouse3DButtons.SR)!=0&&(last.Buttons&Softmouse3DButtons.SR)==0)
-								{
-								}
-
-								// A and D Buttons
-								for(int b=0; b<8; b++)
-								{
-									Softmouse3DButtons button=buttonFilter[b];
-
-									if((diffButtons&button)!=0)
-									{
-										if((buttons&button)!=0) // pressed
-										{
-											////if(dEvt!=null) dEvt(this, new Softmouse3DButtonsEventArgs(inputHeader.header.hDevice, button, 
-
-											//if(last.ButtonsStates[b].Clicks>0) last.ButtonsStates[i].Clicks++; // Add another click
-											//else
-											//{
-											//	last.ButtonsStates[i].Clicks=1;
-											//	last.ButtonsStates[i].Down=ticks;
-											//	last.ButtonsStates[i].MoveX=0;
-											//	last.ButtonsStates[i].MoveY=0;
-											//}
-										}
-										else // released
-										{
-
-										}
-									}
-								}
-
-								// Last, but not least, the shift buttons releases
-								if((buttons&Softmouse3DButtons.SL)==0&&(last.Buttons&Softmouse3DButtons.SL)!=0)
-								{
-								}
-
-								if((buttons&Softmouse3DButtons.SR)==0&&(last.Buttons&Softmouse3DButtons.SR)!=0)
-								{
-								}
-
-								// save new last buttons
-								last.Buttons=buttons;
-							}
+							last.ButtonsStates[i].Clicks=last.ButtonsStates[i].MoveX=last.ButtonsStates[i].MoveY=0;
+							last.ButtonsStates[i].Down=0;
 						}
 					}
+					#endregion
+
+					#region Handle buttons
+					Softmouse3DButtons diffButtons=(buttons^last.Buttons);
+					if(diffButtons==0) continue; // any buttons changed?
+
+					// Order of click and double-click events in WindowsForms (want to provide the same here)
+					// 1. Down (Clicks: 1)
+					// 2. Click (Clicks: 1)
+					// 3. Up (Clicks: 1)
+					// ---- end of single click
+					// 4. Down (Clicks: 2)
+					// 5. DoubleClick (Clicks: 2)
+					// 6. Up (Clicks: 1)
+					// Next click starts again at 1. Triple-click & Co. not support (for now)
+
+					// First the shift buttons down to support very fast button combination
+					if((buttons&Softmouse3DButtons.SL)!=0&&(last.Buttons&Softmouse3DButtons.SL)==0)
+					{
+						if(last.ButtonsStates[8].Clicks==0) // no previous clicks
+						{
+							last.ButtonsStates[8].Down=currentTicks;
+							last.ButtonsStates[8].MoveX=last.ButtonsStates[8].MoveY=0;
+						}
+
+						last.ButtonsStates[8].Clicks++;
+
+						if(dEvt!=null) dEvt(this, new Softmouse3DButtonsEventArgs(inputHeader.header.hDevice, Softmouse3DButtons.SL, last.ButtonsStates[8].Clicks, buttons));
+					}
+
+					if((buttons&Softmouse3DButtons.SR)!=0&&(last.Buttons&Softmouse3DButtons.SR)==0)
+					{
+						if(last.ButtonsStates[9].Clicks==0) // no previous clicks
+						{
+							last.ButtonsStates[9].Down=currentTicks;
+							last.ButtonsStates[9].MoveX=last.ButtonsStates[9].MoveY=0;
+						}
+
+						last.ButtonsStates[9].Clicks++;
+
+						if(dEvt!=null) dEvt(this, new Softmouse3DButtonsEventArgs(inputHeader.header.hDevice, Softmouse3DButtons.SR, last.ButtonsStates[9].Clicks, buttons));
+					}
+
+					// Handle A and D buttons (down and up events)
+					for(int b=0; b<8; b++)
+					{
+						Softmouse3DButtons button=buttonFilter[b];
+						if((diffButtons&button)==0) continue; // Nothing new for this button
+
+						if((buttons&button)!=0) // pressed
+						{
+							if(last.ButtonsStates[b].Clicks==0) // no previous clicks
+							{
+								last.ButtonsStates[b].Down=currentTicks;
+								last.ButtonsStates[b].MoveX=last.ButtonsStates[b].MoveY=0;
+							}
+
+							last.ButtonsStates[b].Clicks++;
+
+							if(dEvt!=null) dEvt(this, new Softmouse3DButtonsEventArgs(inputHeader.header.hDevice, button, last.ButtonsStates[b].Clicks, buttons));
+						}
+						else // released
+						{
+							if(last.ButtonsStates[b].Clicks<2) // Fire Click event
+							{
+								if(cEvt!=null) cEvt(this, new Softmouse3DButtonsEventArgs(inputHeader.header.hDevice, button, 1, buttons));
+							}
+							else // Fire DoubleClick event
+							{
+								if(dcEvt!=null) dcEvt(this, new Softmouse3DButtonsEventArgs(inputHeader.header.hDevice, button, 2, buttons));
+								last.ButtonsStates[b].Clicks=0; // reset clicks
+							}
+
+							// Fire Up event
+							if(uEvt!=null) uEvt(this, new Softmouse3DButtonsEventArgs(inputHeader.header.hDevice, button, 1, buttons)); // clicks 1 (as MS does it)
+						}
+					}
+
+					// Last, but not least, the shift buttons releases
+					if((buttons&Softmouse3DButtons.SL)==0&&(last.Buttons&Softmouse3DButtons.SL)!=0)
+					{
+						if(last.ButtonsStates[8].Clicks<2) // Fire Click event
+						{
+							if(cEvt!=null) cEvt(this, new Softmouse3DButtonsEventArgs(inputHeader.header.hDevice, Softmouse3DButtons.SL, 1, buttons));
+						}
+						else // Fire DoubleClick event
+						{
+							if(dcEvt!=null) dcEvt(this, new Softmouse3DButtonsEventArgs(inputHeader.header.hDevice, Softmouse3DButtons.SL, 2, buttons));
+							last.ButtonsStates[8].Clicks=0; // reset clicks
+						}
+
+						// Fire Up event
+						if(uEvt!=null) uEvt(this, new Softmouse3DButtonsEventArgs(inputHeader.header.hDevice, Softmouse3DButtons.SL, 1, buttons)); // clicks 1 (as MS does it)
+					}
+
+					if((buttons&Softmouse3DButtons.SR)==0&&(last.Buttons&Softmouse3DButtons.SR)!=0)
+					{
+						if(last.ButtonsStates[9].Clicks<2) // Fire Click event
+						{
+							if(cEvt!=null) cEvt(this, new Softmouse3DButtonsEventArgs(inputHeader.header.hDevice, Softmouse3DButtons.SR, 1, buttons));
+						}
+						else // Fire DoubleClick event
+						{
+							if(dcEvt!=null) dcEvt(this, new Softmouse3DButtonsEventArgs(inputHeader.header.hDevice, Softmouse3DButtons.SR, 2, buttons));
+							last.ButtonsStates[9].Clicks=0; // reset clicks
+						}
+
+						// Fire Up event
+						if(uEvt!=null) uEvt(this, new Softmouse3DButtonsEventArgs(inputHeader.header.hDevice, Softmouse3DButtons.SR, 1, buttons)); // clicks 1 (as MS does it)
+					}
+
+					// Save new last buttons
+					last.Buttons=buttons;
+					#endregion
 				}
-				finally
-				{
-					Marshal.FreeHGlobal(buffer);
-				}
+			}
+			finally
+			{
+				Marshal.FreeHGlobal(buffer);
 			}
 		}
 	}
