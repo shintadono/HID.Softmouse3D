@@ -73,5 +73,65 @@ namespace HID.Softmouse3D
 		/// Button A4 pressed. (East)
 		/// </summary>
 		A4=0x00040000,
+
+		/// <summary>
+		/// Button A1 pressed while SL is pressed. (North)
+		/// </summary>
+		SLA1=0x01000000,
+
+		/// <summary>
+		/// Button A2 pressed while SL is pressed. (West)
+		/// </summary>
+		SLA2=0x02000000,
+
+		/// <summary>
+		/// Button A3 pressed while SL is pressed. (South)
+		/// </summary>
+		SLA3=0x08000000,
+
+		/// <summary>
+		/// Button A4 pressed while SL is pressed. (East)
+		/// </summary>
+		SLA4=0x04000000,
+
+		/// <summary>
+		/// Button A1 pressed while SR is pressed. (North)
+		/// </summary>
+		SRA1=0x00100000,
+
+		/// <summary>
+		/// Button A2 pressed while SR is pressed. (West)
+		/// </summary>
+		SRA2=0x00200000,
+
+		/// <summary>
+		/// Button A3 pressed while SR is pressed. (South)
+		/// </summary>
+		SRA3=0x00800000,
+
+		/// <summary>
+		/// Button A4 pressed while SR is pressed. (East)
+		/// </summary>
+		SRA4=0x00400000,
+
+		/// <summary>
+		/// Button A1 pressed while SL and SR is pressed. (North)
+		/// </summary>
+		SLRA1=0x10000000,
+
+		/// <summary>
+		/// Button A2 pressed while SL and SR is pressed. (West)
+		/// </summary>
+		SLRA2=0x20000000,
+
+		/// <summary>
+		/// Button A3 pressed while SL and SR is pressed. (South)
+		/// </summary>
+		SLRA3=0x80000000,
+
+		/// <summary>
+		/// Button A4 pressed while SL and SR is pressed. (East)
+		/// </summary>
+		SLRA4=0x40000000,
 	}
 }

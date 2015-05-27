@@ -28,9 +28,9 @@ namespace HID.Softmouse3D
 		public int DeltaZ;
 
 		/// <summary>
-		/// The buttons.
+		/// The state of all buttons.
 		/// </summary>
-		public Softmouse3DButtons Buttons;
+		public Softmouse3DButtons ButtonStates;
 
 		/// <summary>
 		/// Constructs an empty instance.
@@ -51,7 +51,7 @@ namespace HID.Softmouse3D
 			DeltaX=deltaX;
 			DeltaY=deltaY;
 			DeltaZ=deltaZ;
-			Buttons=buttons;
+			ButtonStates=buttons;
 		}
 	}
 }
